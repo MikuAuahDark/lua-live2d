@@ -22,15 +22,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Config */
-#ifdef HAVE_LUALIVE2D_CONFIG_H
-#include "lualive2d_config.h"
-#endif
-
-#ifndef LUALIVE2D_METATABLE_NAME
-#define LUALIVE2D_METATABLE_NAME "Live2DModel*"
-#endif
-
 /* Lua */
 #include "lua.h"
 #include "lauxlib.h"
@@ -45,6 +36,10 @@
 #define EXPORT_SIGNATURE
 #endif
 
+#ifndef LUALIVE2D_METATABLE_NAME
+#define LUALIVE2D_METATABLE_NAME "Live2DModel*"
+#endif
+
 /* This define align memory */
 #define ALIGN_TO_N(ptr, n) ((size_t) (ptr) + (n - 1) & (~(size_t) (n - 1)))
 
@@ -55,6 +50,8 @@ typedef struct ModelDefinition
 	csmMoc *moc;
 	void *modelMemory, *modelMemoryAligned;
 	csmModel *model;
+	csmVector2 modelDimensions, modelCenter;
+	float modelDPI;
 } ModelDefinition;
 
 typedef union FunctionString
@@ -69,6 +66,7 @@ static int l2dh_istrue(lua_State *L, int idx)
 
 	switch(type)
 	{
+		case LUA_TNONE:
 		case LUA_TNIL:
 			return 0;
 		case LUA_TBOOLEAN:
@@ -135,6 +133,9 @@ static int l2d_loadModel(lua_State *L)
 		luaL_error(L, "cannot load model");
 	}
 
+	/* Read canvas info */
+	csmReadCanvasInfo(tempModel.model, &tempModel.modelDimensions, &tempModel.modelCenter, &tempModel.modelDPI);
+
 	/* Create new Lua userdata */
 	modelObject = (ModelDefinition *) lua_newuserdata(L, sizeof(ModelDefinition));
 	memcpy(modelObject, &tempModel, sizeof(ModelDefinition));
@@ -171,20 +172,35 @@ static int l2dw_update(lua_State *L)
 
 static int l2dw_readCanvasInfo(lua_State *L)
 {
-	ModelDefinition *model;
-	csmVector2 size, offset;
-	float units;
+	ModelDefinition *model = (ModelDefinition *) luaL_checkudata(L, 1, LUALIVE2D_METATABLE_NAME);
 
-	model = (ModelDefinition *) luaL_checkudata(L, 1, LUALIVE2D_METATABLE_NAME);
-	csmReadCanvasInfo(model->model, &size, &offset, &units);
-
-	lua_pushnumber(L, size.X);
-	lua_pushnumber(L, size.Y);
-	lua_pushnumber(L, offset.X);
-	lua_pushnumber(L, offset.Y);
-	lua_pushnumber(L, units);
+	lua_pushnumber(L, model->modelDimensions.X);
+	lua_pushnumber(L, model->modelDimensions.Y);
+	lua_pushnumber(L, model->modelCenter.X);
+	lua_pushnumber(L, model->modelCenter.Y);
+	lua_pushnumber(L, model->modelDPI);
 
 	return 5;
+}
+
+/* Returns namedRet */
+static int l2dh_usertablenamed(lua_State *L, int idx, int *tableIndex, int allocsize)
+{
+	/* Check if user supply a table. */
+	if (lua_istable(L, idx))
+	{
+		/* Use existing, user-supplied table */
+		*tableIndex = idx;
+		return l2dh_istrue(L, idx + 1);
+	}
+	else
+	{
+		/* Create new table */
+		int namedRet = l2dh_istrue(L, idx);
+		lua_createtable(L, namedRet ? 0 : allocsize, namedRet ? allocsize : 0);
+		*tableIndex = lua_gettop(L);
+		return namedRet;
+	}
 }
 
 static int l2dw_getParameterDefault(lua_State *L)
@@ -200,21 +216,7 @@ static int l2dw_getParameterDefault(lua_State *L)
 	paramMin = csmGetParameterMinimumValues(model->model);
 	paramMax = csmGetParameterMaximumValues(model->model);
 	paramDef = csmGetParameterDefaultValues(model->model);
-
-	/* Check if user supply a table. */
-	if (lua_istable(L, 2))
-	{
-		/* Use existing, user-supplied table */
-		tableIndex = 2;
-		namedRet = l2dh_istrue(L, 3);
-	}
-	else
-	{
-		/* Create new table */
-		namedRet = l2dh_istrue(L, 2);
-		lua_createtable(L, namedRet ? 0 : paramCount, namedRet ? paramCount : 0);
-		tableIndex = lua_gettop(L);
-	}
+	namedRet = l2dh_usertablenamed(L, 2, &tableIndex, paramCount);
 
 	if (namedRet)
 	{
@@ -288,21 +290,7 @@ static int l2dw_getParameterValues(lua_State *L)
 	model = (ModelDefinition *) luaL_checkudata(L, 1, LUALIVE2D_METATABLE_NAME);
 	paramCount = csmGetParameterCount(model->model);
 	paramValues = csmGetParameterValues(model->model);
-
-	/* Check if user supply a table. */
-	if (lua_istable(L, 2))
-	{
-		/* Use existing, user-supplied table */
-		tableIndex = 2;
-		namedRet = l2dh_istrue(L, 3);
-	}
-	else
-	{
-		/* Create new table */
-		namedRet = l2dh_istrue(L, 2);
-		lua_createtable(L, namedRet ? 0 : paramCount, namedRet ? paramCount : 0);
-		tableIndex = lua_gettop(L);
-	}
+	namedRet = l2dh_usertablenamed(L, 2, &tableIndex, paramCount);
 
 	if (namedRet)
 	{
@@ -381,21 +369,7 @@ static int l2dw_getPartsData(lua_State *L)
 	partCount = csmGetPartCount(model->model);
 	partNames = csmGetPartIds(model->model);
 	partParent = csmGetPartParentPartIndices(model->model);
-	
-	/* Check if user supply a table. */
-	if (lua_istable(L, 2))
-	{
-		/* Use existing, user-supplied table */
-		tableIndex = 2;
-		namedRet = l2dh_istrue(L, 3);
-	}
-	else
-	{
-		/* Create new table */
-		namedRet = l2dh_istrue(L, 2);
-		lua_createtable(L, namedRet ? 0 : partCount, namedRet ? partCount : 0);
-		tableIndex = lua_gettop(L);
-	}
+	namedRet = l2dh_usertablenamed(L, 2, &tableIndex, partCount);
 
 	if (namedRet)
 	{
@@ -435,6 +409,8 @@ static int l2dw_getPartsData(lua_State *L)
 				lua_pushinteger(L, partParent[i]);
 				lua_rawset(L, -3);
 			}
+
+			lua_rawset(L, tableIndex);
 		}
 	}
 
@@ -442,9 +418,309 @@ static int l2dw_getPartsData(lua_State *L)
 	return 2;
 }
 
+static int l2dw_getPartsOpacity(lua_State *L)
+{
+	ModelDefinition *model;
+	int partCount, namedRet, tableIndex, i;
+	const float *partOpacity;
+	const char **partNames;
+
+	model = (ModelDefinition *) luaL_checkudata(L, 1, LUALIVE2D_METATABLE_NAME);
+	partCount = csmGetPartCount(model->model);
+	partOpacity = csmGetPartOpacities(model->model);
+	namedRet = l2dh_usertablenamed(L, 2, &tableIndex, partCount);
+
+	if (namedRet)
+	{
+		partNames = csmGetPartIds(model->model);
+
+		for(i = 0; i < partCount; i++)
+		{
+			lua_pushstring(L, partNames[i]);
+			lua_pushnumber(L, partOpacity[i]);
+			lua_rawset(L, -3);
+		}
+	}
+	else
+	{
+		for(i = 0; i < partCount; i++)
+		{
+			lua_pushinteger(L, i + 1);
+			lua_pushnumber(L, partOpacity[i]);
+			lua_rawset(L, -3);
+		}
+	}
+
+	lua_pushvalue(L, tableIndex);
+	return 1;
+}
+
+static int l2dw_getDrawableData(lua_State *L)
+{
+	ModelDefinition *model;
+	int drawCount, namedRet, tableIndex, i, j;
+	const char **drawNames;
+	const unsigned short **drawIndex;
+	const int *drawIndexCount, *drawMaskCount, *drawTex, *drawVertCount, **drawMask;
+	const csmFlags *drawConstFlags;
+	const csmVector2 **drawUVs;
+	static csmFlags blendMulAndAdd = csmBlendAdditive | csmBlendAdditive;
+
+	model = (ModelDefinition *) luaL_checkudata(L, 1, LUALIVE2D_METATABLE_NAME);
+	drawCount = csmGetDrawableCount(model->model);
+	drawNames = csmGetDrawableIds(model->model);
+	drawIndex = csmGetDrawableIndices(model->model);
+	drawIndexCount = csmGetDrawableIndexCounts(model->model);
+	drawMaskCount = csmGetDrawableMaskCounts(model->model);
+	drawTex = csmGetDrawableTextureIndices(model->model);
+	drawVertCount = csmGetDrawableVertexCounts(model->model);
+	drawMask = csmGetDrawableMasks(model->model);
+	drawConstFlags = csmGetDrawableConstantFlags(model->model);
+	drawUVs = csmGetDrawableVertexUvs(model->model);
+	namedRet = l2dh_usertablenamed(L, 2, &tableIndex, drawCount);
+
+	for (i = 0; i < drawCount; i++)
+	{
+		if (namedRet)
+		{
+			lua_pushstring(L, drawNames[i]);
+			lua_createtable(L, 0, 5 + (drawMaskCount[i] > 0 ? 1 : 0));
+
+			/* Index */
+			lua_pushlstring(L, "index", 5);
+			lua_pushinteger(L, i + 1);
+			lua_rawset(L, -3);
+		}
+		else
+		{
+			lua_pushinteger(L, i + 1);
+			lua_createtable(L, 0, 5 + (drawMaskCount[i] > 0));
+
+			/* Index */
+			lua_pushlstring(L, "name", 4);
+			lua_pushstring(L, drawNames[i]);
+			lua_rawset(L, -3);
+		}
+
+		/* Flags */
+		lua_pushlstring(L, "flags", 5);
+		lua_createtable(L, 0, 2);
+		lua_pushlstring(L, "blending", 8);
+		if ((drawConstFlags[i] & blendMulAndAdd) == blendMulAndAdd || (drawConstFlags[i] & blendMulAndAdd) == 0)
+			lua_pushlstring(L, "normal", 6);
+		else if (drawConstFlags[i] & csmBlendAdditive)
+			lua_pushlstring(L, "add", 3);
+		else if (drawConstFlags[i] & csmBlendMultiplicative)
+			lua_pushlstring(L, "multiply", 8);
+		lua_rawset(L, -3); /* blending */
+		lua_pushlstring(L, "doublesided", 11);
+		lua_pushboolean(L, drawConstFlags[i] & csmIsDoubleSided);
+		lua_rawset(L, -3); /* doublesided */
+		lua_rawset(L, -3); /* flags */
+		/* Texture */
+		lua_pushlstring(L, "texture", 7);
+		lua_pushinteger(L, drawTex[i] + 1);
+		lua_rawset(L, -3);
+		/* Mask */
+		if (drawMaskCount[i] > 0)
+		{
+			lua_pushlstring(L, "mask", 4);
+			lua_createtable(L, drawMaskCount[i], 0);
+
+			if (namedRet)
+			{
+				for (j = 0; j < drawMaskCount[i]; j++)
+				{
+					lua_pushinteger(L, j + 1);
+					lua_pushstring(L, drawNames[drawMask[i][j]]);
+					lua_rawset(L, -3);
+				}
+			}
+			else
+			{
+				for (j = 0; j < drawMaskCount[i]; j++)
+				{
+					lua_pushinteger(L, j + 1);
+					lua_pushinteger(L, drawMask[i][j] + 1);
+					lua_rawset(L, -3);
+				}
+			}
+
+			lua_rawset(L, -3); /* mask */
+		}
+		/* Vertex Count */
+		lua_pushlstring(L, "vertexCount", 11);
+		lua_pushinteger(L, drawVertCount[i]);
+		lua_rawset(L, -3);
+		/* UVs */
+		lua_pushlstring(L, "uv", 2);
+		lua_createtable(L, drawVertCount[i] * 2, 0);
+		for (j = 0; j < drawVertCount[i]; j++)
+		{
+			lua_pushinteger(L, j * 2 + 1);
+			lua_pushnumber(L, drawUVs[i][j].X);
+			lua_rawset(L, -3);
+			lua_pushinteger(L, j * 2 + 2);
+			lua_pushnumber(L, drawUVs[i][j].X);
+			lua_rawset(L, -3);
+		}
+		lua_rawset(L, -3);
+		/* Index Map */
+		lua_pushlstring(L, "indexMap", 8);
+		lua_createtable(L, drawIndexCount[i], 0);
+		for (j = 0; j < drawIndexCount[i]; j++)
+		{
+			lua_pushinteger(L, j + 1);
+			lua_pushinteger(L, drawIndex[i][j] + 1);
+			lua_rawset(L, -3);
+		}
+		lua_rawset(L, -3);
+
+		lua_rawset(L, tableIndex); /* end */
+	}
+
+	lua_pushvalue(L, tableIndex);
+	return 1;
+}
+
+static int l2dw_getDynamicDrawableData(lua_State *L)
+{
+	ModelDefinition *model;
+	int drawCount, namedRet, tableIndex, i, j, alwaysSetVertex;
+	const char **drawNames;
+	const int *drawOrder, *drawRenderOrder, *drawVertexCount;
+	const csmFlags *drawDynFlags;
+	const float *drawOpacity;
+	const csmVector2 **drawVertex;
+
+	model = (ModelDefinition *) luaL_checkudata(L, 1, LUALIVE2D_METATABLE_NAME);
+	drawCount = csmGetDrawableCount(model->model);
+	drawNames = csmGetDrawableIds(model->model);
+	drawOrder = csmGetDrawableDrawOrders(model->model);
+	drawRenderOrder = csmGetDrawableRenderOrders(model->model);
+	drawVertexCount = csmGetDrawableVertexCounts(model->model);
+	drawDynFlags = csmGetDrawableDynamicFlags(model->model);
+	drawOpacity = csmGetDrawableOpacities(model->model);
+	drawVertex = csmGetDrawableVertexPositions(model->model);
+	namedRet = l2dh_usertablenamed(L, 2, &tableIndex, drawCount);
+
+	for (i = 0; i < drawCount; i++)
+	{
+		if (namedRet)
+			lua_pushstring(L, drawNames[i]);
+		else
+			lua_pushinteger(L, i + 1);
+		lua_rawget(L, tableIndex);
+
+		/* If it's not a table, create new table */
+		if (!lua_istable(L, -1))
+		{
+			lua_pop(L, 1);
+			lua_createtable(L, 0, 5);
+			if (namedRet)
+				lua_pushstring(L, drawNames[i]);
+			else
+				lua_pushinteger(L, i + 1);
+			lua_pushvalue(L, -2);
+			lua_rawset(L, tableIndex);
+			/* now we have the mutable table at -1 */
+		}
+
+		/* drawOrder */
+		lua_pushlstring(L, "drawOrder", 9);
+		lua_pushinteger(L, drawOrder[i]);
+		lua_rawset(L, -3);
+		/* renderOrder */
+		lua_pushlstring(L, "renderOrder", 11);
+		lua_pushinteger(L, drawRenderOrder[i]);
+		lua_rawset(L, -3);
+		/* opacity */
+		lua_pushlstring(L, "opacity", 7);
+		lua_pushnumber(L, drawOpacity[i]);
+		lua_rawset(L, -3);
+		/* Dynamic flags */
+		lua_pushlstring(L, "dynamicFlags", 12);
+		lua_rawget(L, -2);
+		/* If it's not a table, create new table, leaving it at -1 */
+		if (!lua_istable(L, -1))
+		{
+			lua_pop(L, 1);
+			lua_createtable(L, 0, 6);
+			/* Set the new table, leaving the new table at -1 */
+			lua_pushlstring(L, "dynamicFlags", 12);
+			lua_pushvalue(L, -2);
+			lua_rawset(L, -4);
+		}
+		/* visible - Dynamic flags */
+		lua_pushlstring(L, "visible", 7);
+		lua_pushboolean(L, drawDynFlags[i] & csmIsVisible);
+		lua_rawset(L, -3);
+		/* visibilityChanged - Dynamic flags */
+		lua_pushlstring(L, "visibilityChanged", 17);
+		lua_pushboolean(L, drawDynFlags[i] & csmVisibilityDidChange);
+		lua_rawset(L, -3);
+		/* opacityChanged - Dynamic flags */
+		lua_pushlstring(L, "opacityChanged", 14);
+		lua_pushboolean(L, drawDynFlags[i] & csmOpacityDidChange);
+		lua_rawset(L, -3);
+		/* drawOrderChanged - Dynamic flags */
+		lua_pushlstring(L, "drawOrderChanged", 16);
+		lua_pushboolean(L, drawDynFlags[i] & csmDrawOrderDidChange);
+		lua_rawset(L, -3);
+		/* renderOrderChanged - Dynamic flags */
+		lua_pushlstring(L, "renderOrderChanged", 18);
+		lua_pushboolean(L, drawDynFlags[i] & csmRenderOrderDidChange);
+		lua_rawset(L, -3);
+		/* vertexChanged - Dynamic flags */
+		lua_pushlstring(L, "vertexChanged", 13);
+		lua_pushboolean(L, drawDynFlags[i] & csmVertexPositionsDidChange);
+		lua_rawset(L, -3);
+		/* remove the flags table */
+		lua_pop(L, 1);
+		/* Vertex positions */
+		lua_pushlstring(L, "vertexPosition", 14);
+		lua_rawget(L, -2);
+		if ((alwaysSetVertex = !lua_istable(L, -1)))
+		{
+			/* Always re-new vertex positions */
+			lua_pop(L, 1);
+			lua_createtable(L, drawVertexCount[i] * 2, 0);
+			/* Set the new table, leaving the new table at -1 */
+			lua_pushlstring(L, "vertexPosition", 14);
+			lua_pushvalue(L, -2);
+			lua_rawset(L, -4);
+		}
+
+		if (alwaysSetVertex || (drawDynFlags[i] & csmVertexPositionsDidChange))
+		{
+			for (j = 0; j < drawVertexCount[i]; j++)
+			{
+				lua_pushinteger(L, j * 2 + 1);
+				lua_pushnumber(L, drawVertex[i][j].X);
+				lua_rawset(L, -3);
+				lua_pushinteger(L, j * 2 + 2);
+				lua_pushnumber(L, drawVertex[i][j].Y);
+				lua_rawset(L, -3);
+			}
+		}
+		/* pop vertex table and the current data table */
+		lua_pop(L, 2);
+	}
+
+	lua_pushvalue(L, tableIndex);
+	return 1;
+}
+
+static int l2dw_resetDynamicDrawableFlags(lua_State *L)
+{
+	ModelDefinition *model = (ModelDefinition *) luaL_checkudata(L, 1, LUALIVE2D_METATABLE_NAME);
+	csmResetDrawableDynamicFlags(model->model);
+	return 0;
+}
+
 /* Libraries to export */
 const luaL_Reg l2d_export[] = {
-	{"loadModel", &l2d_loadModel},
+	{"loadModelFromString", &l2d_loadModel},
 	{NULL, NULL}
 };
 
@@ -458,6 +734,10 @@ const luaL_Reg l2dw_export[] = {
 	{"getParameterValues", &l2dw_getParameterValues},
 	{"setParameterValues", &l2dw_setParameterValues},
 	{"getPartsData", &l2dw_getPartsData},
+	{"getPartsOpacity", &l2dw_getPartsOpacity},
+	{"getDrawableData", &l2dw_getDrawableData},
+	{"getDynamicDrawableData", &l2dw_getDynamicDrawableData},
+	{"resetDynamicDrawableFlags", &l2dw_resetDynamicDrawableFlags},
 	{NULL, NULL}
 };
 
@@ -482,6 +762,8 @@ int EXPORT_SIGNATURE luaopen_lualive2d_core(lua_State *L)
 	lua_pushlstring(L, "_mt", 3);
 	/* Create new metatable */
 	luaL_newmetatable(L, LUALIVE2D_METATABLE_NAME);
+	lua_pushlstring(L, "__index", 7);
+	lua_newtable(L);
 	/* Export methods */
 	for (i = l2dw_export; i->name != NULL; i++)
 	{
@@ -489,7 +771,9 @@ int EXPORT_SIGNATURE luaopen_lualive2d_core(lua_State *L)
 		lua_pushcfunction(L, i->func);
 		lua_rawset(L, -3);
 	}
-	/* Set metatable to global module table */
+	/* Set __index to metatable */
+	lua_rawset(L, -3);
+	/* set metatable to global module table */
 	lua_rawset(L, -3);
 
 	/* Export methods */
@@ -554,7 +838,11 @@ int EXPORT_SIGNATURE luaopen_lualive2d_core(lua_State *L)
 	/* Live2D version */
 	csmVer = csmGetVersion();
 	lua_pushlstring(L, "Live2DVersion", 13);
-	lua_pushfstring(L, "%u.%u.%u", (csmVer & 0xFF000000U) >> 24, (csmVer & 0xFF0000) >> 16, csmVer & 0xFFFF);
+	lua_pushfstring(L, "%d.%d.%d", (csmVer & 0xFF000000U) >> 24, (csmVer & 0xFF0000) >> 16, csmVer & 0xFFFF);
+	lua_rawset(L, -3);
+	/* Module version */
+	lua_pushlstring(L, "_VERSION", 8);
+	lua_pushlstring(L, "0.1", 3);
 	lua_rawset(L, -3);
 
 	return 1;
