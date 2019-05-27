@@ -9,6 +9,20 @@ This Lua C module is meant to be used in conjunction with
 
 Note that only this Lua binding is MIT licensed. Live2D Cubism 3 SDK for Native is proprietary, non-free.
 
+Live2D Cubism Core
+------------------
+
+Your Live2D Cubism 3 SDK for Native zip should have this structure
+```
+Cubism3SDKforNative-<version>
++ Core
++ Framework
++ Samples
++ Package.json
++ README.md
+```
+Copy the `Core` folder (only) in the zip to `live2d/Core` folder in this repository (create the `live2d` folder).
+
 Example Code
 ------------
 
